@@ -1,0 +1,279 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Meu App de TV</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://vjs.zencdn.net/8.6.1/video-js.css" rel="stylesheet" />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Inter', sans-serif; }
+        .active-tab { background-color: #2563eb; color: white; }
+        .content-card { transition: transform 0.2s ease-in-out; }
+        .content-card:hover { transform: scale(1.05); }
+        .modal { transition: opacity 0.3s ease; }
+        .episode-list-item:hover { background-color: #334155; }
+        .season-header { cursor: pointer; }
+    </style>
+</head>
+<body class="bg-slate-900 text-white">
+
+    <div id="app" class="min-h-screen flex flex-col">
+        <header class="bg-slate-800 shadow-lg p-4 sticky top-0 z-20">
+            <div class="container mx-auto flex flex-col sm:flex-row justify-between items-center gap-4">
+                <h1 class="text-2xl font-bold">ImpérioTV Player</h1>
+                <nav class="flex items-center bg-slate-700 rounded-lg p-1 space-x-1">
+                    <button data-category="live" class="tab-btn px-4 py-2 text-sm font-medium rounded-md transition">TV Ao Vivo</button>
+                    <button data-category="movies" class="tab-btn px-4 py-2 text-sm font-medium rounded-md transition active-tab">Filmes</button>
+                    <button data-category="series" class="tab-btn px-4 py-2 text-sm font-medium rounded-md transition">Séries</button>
+                </nav>
+                <input type="text" id="search-input" placeholder="Buscar..." class="bg-slate-700 rounded-lg py-2 pl-4 pr-4 w-full sm:w-64 focus:outline-none focus:ring-2 focus:ring-blue-500">
+            </div>
+        </header>
+
+        <main class="container mx-auto p-4 flex-grow">
+            <div id="status-message" class="text-center py-10"></div>
+            <div id="content-grid" class="hidden grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-6"></div>
+        </main>
+        
+        <footer class="bg-slate-800 text-center p-4 text-xs text-gray-400">Aplicação Online</footer>
+    </div>
+
+    <!-- Modal do Player -->
+    <div id="player-modal" class="modal fixed inset-0 bg-black bg-opacity-80 flex items-center justify-center p-4 z-50 hidden opacity-0" onclick="closePlayer()">
+        <div class="bg-black rounded-lg shadow-2xl w-full max-w-4xl" onclick="event.stopPropagation()">
+            <video id="my-player" class="video-js vjs-big-play-centered w-full" controls preload="auto"></video>
+        </div>
+    </div>
+
+    <!-- Modal de Detalhes da Série -->
+    <div id="series-modal" class="modal fixed inset-0 bg-black bg-opacity-90 flex items-center justify-center p-4 z-40 hidden opacity-0" onclick="closeSeriesModal()">
+        <div class="bg-slate-800 rounded-lg shadow-2xl w-full max-w-4xl max-h-[90vh] flex flex-col" onclick="event.stopPropagation()">
+            <div id="series-info-content" class="p-6 overflow-y-auto">
+                <!-- Conteúdo da série será injetado aqui -->
+            </div>
+        </div>
+    </div>
+
+    <script src="https://vjs.zencdn.net/8.6.1/video.min.js"></script>
+    <script>
+    document.addEventListener('DOMContentLoaded', () => {
+        // IMPORTANTE: Substitua a URL abaixo pela URL do seu backend no Render.com
+        const BACKEND_URL = 'https://meu-iptv-backend.onrender.com';
+
+        const state = {
+            currentCategory: 'movies',
+            allData: { live: [], movies: [], series: [] },
+            player: null,
+        };
+
+        const elements = {
+            tabButtons: document.querySelectorAll('.tab-btn'),
+            contentGrid: document.getElementById('content-grid'),
+            statusMessage: document.getElementById('status-message'),
+            searchInput: document.getElementById('search-input'),
+            playerModal: document.getElementById('player-modal'),
+            videoPlayer: document.getElementById('my-player'),
+            seriesModal: document.getElementById('series-modal'),
+            seriesInfoContent: document.getElementById('series-info-content'),
+        };
+        
+        async function fetchData(category) {
+            setStatusMessage('Carregando...', true);
+            try {
+                const response = await fetch(`${BACKEND_URL}/api/list/${category}`);
+                if (!response.ok) throw new Error(`Erro na rede: ${response.statusText}`);
+                const data = await response.json();
+                
+                if (!Array.isArray(data)) {
+                    throw new Error("O servidor não retornou uma lista de conteúdo válida.");
+                }
+                
+                state.allData[category] = data;
+                renderContent(data);
+
+            } catch (error) {
+                console.error("Falha ao buscar dados:", error);
+                setStatusMessage(`Erro ao carregar conteúdo: ${error.message}. Verifique a URL do backend e se o servidor está online.`, false);
+            }
+        }
+        
+        function renderContent(items) {
+            elements.contentGrid.innerHTML = '';
+            if (!items || items.length === 0) {
+                setStatusMessage('Nenhum conteúdo encontrado nesta categoria.', false);
+                return;
+            }
+            
+            clearStatusMessage();
+
+            items.forEach(item => {
+                const coverUrl = item.stream_icon || item.cover;
+                const card = document.createElement('div');
+                card.className = 'content-card bg-slate-700 rounded-lg overflow-hidden cursor-pointer flex flex-col';
+                card.innerHTML = `<div class="aspect-[2/3] w-full"><img src="${coverUrl}" alt="${item.name}" class="w-full h-full object-cover" loading="lazy" onerror="this.src='https://placehold.co/400x600/1e293b/ffffff?text=Erro!'"/></div><div class="p-2 mt-auto"><h3 class="text-sm font-medium truncate">${item.name}</h3></div>`;
+                
+                card.addEventListener('click', () => {
+                    if (state.currentCategory === 'series') {
+                        openSeriesModal(item);
+                    } else {
+                        playItem(item, state.currentCategory);
+                    }
+                });
+                elements.contentGrid.appendChild(card);
+            });
+        }
+
+        function setStatusMessage(message, isLoading) {
+            elements.contentGrid.classList.add('hidden');
+            elements.statusMessage.innerHTML = `
+                <div class="flex flex-col items-center justify-center">
+                    ${isLoading ? '<div class="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-blue-500 mb-4"></div>' : ''}
+                    <p class="text-lg text-gray-400">${message}</p>
+                </div>`;
+        }
+        
+        function clearStatusMessage() {
+            elements.statusMessage.innerHTML = '';
+            elements.contentGrid.classList.remove('hidden');
+        }
+
+        function playItem(item, type) {
+            const serverUrl = 'http://imperiotv.cloud';
+            const user = 'Evertonviamar';
+            const pass = '185675284';
+            const streamId = item.id || item.stream_id;
+            
+            const extension = item.container_extension || (type === 'live' ? 'ts' : 'mp4');
+            const streamType = type === 'movies' ? 'movie' : type;
+
+            const streamUrl = `${serverUrl}/${streamType}/${user}/${pass}/${streamId}.${extension}`;
+            
+            let sourceType = 'video/mp4';
+            if (type === 'live') {
+                sourceType = 'application/x-mpegURL';
+            }
+            
+            state.player.src({ src: streamUrl, type: sourceType });
+            elements.playerModal.classList.remove('hidden');
+            setTimeout(() => {
+                elements.playerModal.classList.remove('opacity-0');
+                state.player.play();
+            }, 10);
+        }
+
+        window.closePlayer = function() {
+            state.player.pause();
+            elements.playerModal.classList.add('opacity-0');
+            setTimeout(() => elements.playerModal.classList.add('hidden'), 300);
+        }
+
+        async function openSeriesModal(seriesItem) {
+            elements.seriesModal.classList.remove('hidden');
+            setTimeout(() => elements.seriesModal.classList.remove('opacity-0'), 10);
+            elements.seriesInfoContent.innerHTML = `<div class="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-blue-500 mx-auto"></div>`;
+
+            try {
+                const response = await fetch(`${BACKEND_URL}/api/series-info/${seriesItem.series_id}`);
+                const data = await response.json();
+
+                if (!data || !data.episodes || typeof data.episodes !== 'object') {
+                    throw new Error("Formato de dados da série inválido recebido do servidor.");
+                }
+
+                const seasons = data.episodes;
+
+                let seriesHtml = `
+                    <div class="flex flex-col md:flex-row gap-6 mb-6">
+                        <img src="${data.info.cover}" alt="${data.info.name}" class="w-48 rounded-lg shadow-lg mx-auto md:mx-0">
+                        <div class='flex-1'>
+                            <h2 class="text-3xl font-bold mb-2">${data.info.name}</h2>
+                            <p class="text-slate-400 text-sm">${data.info.plot || 'Sem sinopse disponível.'}</p>
+                        </div>
+                    </div>
+                    <div class="space-y-2">
+                `;
+                
+                const sortedSeasonNumbers = Object.keys(seasons).sort((a, b) => a - b);
+
+                for (const seasonNum of sortedSeasonNumbers) {
+                    const episodes = seasons[seasonNum];
+                    seriesHtml += `
+                        <div>
+                            <h3 class="season-header bg-slate-700 p-3 rounded-md font-semibold" onclick="toggleSeason(${seasonNum})">
+                                Temporada ${seasonNum}
+                            </h3>
+                            <div id="season-${seasonNum}" class="hidden pl-4 pt-2 space-y-1">`;
+                    
+                    episodes.sort((a, b) => a.episode_num - b.episode_num);
+                    
+                    episodes.forEach(episode => {
+                        seriesHtml += `<div class="episode-list-item p-2 rounded-md cursor-pointer flex justify-between items-center" data-episode-id="${episode.id}" data-extension="${episode.container_extension}">
+                            <span>${episode.episode_num}. ${episode.title}</span>
+                            <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" /><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+                        </div>`;
+                    });
+
+                    seriesHtml += `</div></div>`;
+                }
+
+                seriesHtml += `</div>`;
+                elements.seriesInfoContent.innerHTML = seriesHtml;
+                
+                document.querySelectorAll('.episode-list-item').forEach(el => {
+                    el.addEventListener('click', () => {
+                         const episodeData = {
+                            id: el.dataset.episodeId,
+                            container_extension: el.dataset.extension,
+                        };
+                        closeSeriesModal();
+                        setTimeout(() => playItem(episodeData, 'series'), 300);
+                    });
+                });
+
+            } catch (error) {
+                elements.seriesInfoContent.innerHTML = `<p class="text-red-400">Erro ao carregar detalhes da série: ${error.message}</p>`;
+            }
+        }
+
+        window.toggleSeason = (seasonNum) => {
+            document.getElementById(`season-${seasonNum}`).classList.toggle('hidden');
+        };
+
+        window.closeSeriesModal = () => {
+            elements.seriesModal.classList.add('opacity-0');
+            setTimeout(() => elements.seriesModal.classList.add('hidden'), 300);
+        }
+
+        function handleSearch(term) {
+            const lowerTerm = term.toLowerCase();
+            const currentData = state.allData[state.currentCategory] || [];
+            const results = currentData.filter(item => item.name && item.name.toLowerCase().includes(lowerTerm));
+            renderContent(results);
+        }
+        
+        async function init() {
+            state.player = videojs(elements.videoPlayer, { autoplay: false, controls: true, fluid: true, aspect_ratio: "16:9" });
+
+            elements.tabButtons.forEach(button => {
+                button.addEventListener('click', () => {
+                    state.currentCategory = button.dataset.category;
+                    elements.tabButtons.forEach(btn => btn.classList.remove('active-tab'));
+                    button.classList.add('active-tab');
+                    elements.searchInput.value = '';
+                    fetchData(state.currentCategory);
+                });
+            });
+
+            elements.searchInput.addEventListener('input', (e) => handleSearch(e.target.value));
+
+            await fetchData(state.currentCategory);
+        }
+
+        init();
+    });
+    </script>
+</body>
+</html>
+
